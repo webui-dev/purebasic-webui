@@ -1,8 +1,8 @@
 ; /*
-;   WebUI Library 2.3.0
-;   http://webui.me
+;   WebUI Library 2.5.0-beta.4
+;   https://webui.me
 ;   https://github.com/webui-dev/webui
-;   Copyright (c) 2020-2023 Hassan Draga.
+;   Copyright (c) 2020-2026 Hassan Draga.
 ;   Licensed under MIT License.
 ;   All rights reserved.
 ;   Canada.
@@ -17,48 +17,72 @@ CompilerIf #PB_Compiler_IsMainFile
 CompilerEndIf
 
 
-#WEBUI_VERSION = "2.3.0"
-#WEBUI_MAX_IDS = 512
+#WEBUI_VERSION = "2.5.0-beta.4"
+#WEBUI_MAX_IDS = 65535
 
 Enumeration webui_browsers
-  #AnyBrowser
-  #Chrome
-  #Firefox
-  #Edge
-  #Safari
-  #Chromium
-  #Opera
-  #Brave
-  #Vivaldi
-  #Epic
-  #Yandex
+  #NoBrowser    ; 0. No web browser
+  #AnyBrowser   ; 1. Default recommended web browser
+  #Chrome       ; 2. Google Chrome
+  #Firefox      ; 3. Mozilla Firefox
+  #Edge         ; 4. Microsoft Edge
+  #Safari       ; 5. Apple Safari
+  #Chromium     ; 6. The Chromium Project
+  #Opera        ; 7. Opera Browser
+  #Brave        ; 8. The Brave Browser
+  #Vivaldi      ; 9. The Vivaldi Browser
+  #Epic         ; 10. The Epic Browser
+  #Yandex       ; 11. The Yandex Browser
+  #ChromiumBased ; 12. Any Chromium based browser
+  #Webview      ; 13. WebView (Non-web-browser)
 EndEnumeration
 
-Enumeration webui_runtimes 
-  #None
-  #Deno
-  #NodeJS
+Enumeration webui_runtimes
+  #None   ; 0. Prevent WebUI from using any runtime for .js and .ts files
+  #Deno   ; 1. Use Deno runtime for .js and .ts files
+  #NodeJS ; 2. Use Nodejs runtime for .js files
+  #Bun    ; 3. Use Bun runtime for .js and .ts files
 EndEnumeration
 
 Enumeration webui_events
-  #WEBUI_EVENT_DISCONNECTED
-  #WEBUI_EVENT_CONNECTED
-  #WEBUI_EVENT_MULTI_CONNECTION
-  #WEBUI_EVENT_UNWANTED_CONNECTION
-  #WEBUI_EVENT_MOUSE_CLICK
-  #WEBUI_EVENT_NAVIGATION
-  #WEBUI_EVENT_CALLBACK
+  #WEBUI_EVENT_DISCONNECTED ; 0. Window disconnection event
+  #WEBUI_EVENT_CONNECTED    ; 1. Window connection event
+  #WEBUI_EVENT_MOUSE_CLICK  ; 2. Mouse click event
+  #WEBUI_EVENT_NAVIGATION   ; 3. Window navigation event
+  #WEBUI_EVENT_CALLBACK     ; 4. Function call event
+EndEnumeration
+
+Enumeration webui_config
+  #show_wait_connection   ; 0. Control if show() should wait for the window to connect before returning
+  #ui_event_blocking      ; 1. Process UI events one at a time in a single thread (True) or each in a new thread (False)
+  #folder_monitor         ; 2. Auto-refresh the window UI when any file in the root folder changes
+  #multi_client           ; 3. Allow multiple clients to connect to the same window
+  #use_cookies            ; 4. Allow or prevent WebUI from adding webui_auth cookies
+  #asynchronous_response  ; 5. If backend uses async operations, set to True to make webui wait for webui_return_x()
+EndEnumeration
+
+Enumeration webui_logger_level
+  #WEBUI_LOGGER_LEVEL_DEBUG ; 0. All logs with all details
+  #WEBUI_LOGGER_LEVEL_INFO  ; 1. Only general logs
+  #WEBUI_LOGGER_LEVEL_ERROR ; 2. Only fatal error logs
 EndEnumeration
 
 Structure webui_event_t Align #PB_Structure_AlignC
   window.i        ; The window object number
   event_type.i    ; Event type
   *element        ; HTML element ID
-  *data           ; JavaScript data
   event_number.i  ; Internal WebUI
+  bind_id.i       ; Bind ID
+  client_id.i     ; Client's unique ID
+  connection_id.i ; Client's connection ID
+  *cookies        ; Client's full cookies
 EndStructure
 
-PrototypeC PrototypeC_webui_event(*e.webui_event_t)
+PrototypeC   PrototypeC_webui_event(*e.webui_event_t)
+PrototypeC.i PrototypeC_webui_close_handler(window.i)
+PrototypeC.i PrototypeC_webui_file_handler(filename.p-Ascii, *length)
+PrototypeC.i PrototypeC_webui_file_handler_window(window.i, filename.p-Ascii, *length)
+PrototypeC   PrototypeC_webui_logger(level.i, log.p-Ascii, *user_data)
 
 CompilerSelect #PB_Compiler_OS
   CompilerCase #PB_OS_Windows
@@ -70,78 +94,234 @@ CompilerSelect #PB_Compiler_OS
         ;ImportC "webui-2-x64.dyn"
         ImportC "webui-2-static-x64.a"
       CompilerEndSelect
+
+      ; -- Window --------------------------
       ; Create a new webui window object.
-      webui_new_window()
-      ; Create a new webui window object.
-      webui_new_window_id(window_number.i)
-      ; Get a free window ID that can be used with `webui_new_window_id()`
+      webui_new_window.i()
+      ; Create a new webui window object using a specified window number.
+      webui_new_window_id.i(window_number.i)
+      ; Get a free window ID that can be used with `webui_new_window_id()`.
       webui_get_new_window_id.i()
-      ; Bind a specific html element click event with a function. Empty element means all events.
-      webui_bind.i(window.i, element.p-Ascii, webui_event.PrototypeC_webui_event)
-      ; Show a window using a embedded HTML, or a file. If the window is already
+      ; Bind an HTML element and a JavaScript object with a backend function. Empty element means all events.
+      webui_bind.i(window.i, element.p-Ascii, func.PrototypeC_webui_event)
+      ; Add user data to a bind that can be read later using `webui_get_context()`.
+      webui_set_context(window.i, element.p-Ascii, *context)
+      ; Get user data set using `webui_set_context()`.
+      webui_get_context.i(*e.webui_event_t)
+      ; Get the recommended web browser ID to use.
+      webui_get_best_browser.i(window.i)
+      ; Show a window using embedded HTML, or a file. Refreshes all clients in multi-client mode.
       webui_show.i(window.i, content.p-Ascii)
-      ; Same as webui_show(). But with a specific web browser.
-      webui_show_browser(window.i, content.p-Ascii, browser.i)
-      ; Set the window in Kiosk mode (Full screen)
+      ; Show a window using embedded HTML, or a file. Single client.
+      webui_show_client.i(*e.webui_event_t, content.p-Ascii)
+      ; Same as `webui_show()` but using a specific web browser.
+      webui_show_browser.i(window.i, content.p-Ascii, browser.i)
+      ; Start only the local web server and return the URL. No window will be shown.
+      webui_start_server.i(window.i, content.p-Ascii)
+      ; Show a WebView window using embedded HTML, or a file.
+      webui_show_wv.i(window.i, content.p-Ascii)
+      ; Set the window in Kiosk mode (Full screen).
       webui_set_kiosk(window.i, status.i)
+      ; Bring a window to the front and focus it.
+      webui_focus(window.i)
+      ; Add user-defined web browser CLI parameters.
+      webui_set_custom_parameters(window.i, params.p-Ascii)
+      ; Set the window with high-contrast support.
+      webui_set_high_contrast(window.i, status.i)
+      ; Sets whether the window frame is resizable or fixed. Works only on WebView window.
+      webui_set_resizable(window.i, status.i)
+      ; Get OS high contrast preference.
+      webui_is_high_contrast.i()
+      ; Check if a web browser is installed.
+      webui_browser_exist.i(browser.i)
       ; Wait until all opened windows get closed.
       webui_wait()
-      ; Close a specific window only. The window object will still exist.
+      ; Wait asynchronously until all opened windows get closed.
+      webui_wait_async.i()
+      ; Close a specific window only. The window object will still exist. All clients.
       webui_close(window.i)
+      ; Minimize a WebView window.
+      webui_minimize(window.i)
+      ; Maximize a WebView window.
+      webui_maximize(window.i)
+      ; Close a specific client.
+      webui_close_client(*e.webui_event_t)
       ; Close a specific window and free all memory resources.
       webui_destroy(window.i)
-      ; Close all opened windows. webui_wait() will break.
+      ; Close all open windows. `webui_wait()` will return (Break).
       webui_exit()
-      ; Set the web-server root folder path.
+      ; Set the web-server root folder path for a specific window.
       webui_set_root_folder.i(window.i, path.p-Ascii)
-      
+      ; Set custom browser folder path.
+      webui_set_browser_folder(path.p-Ascii)
+      ; Set the web-server root folder path for all windows.
+      webui_set_default_root_folder.i(path.p-Ascii)
+      ; Set a callback to catch the close event of the WebView window. Must return False to prevent close.
+      webui_set_close_handler_wv(window.i, close_handler.PrototypeC_webui_close_handler)
+      ; Set a custom handler to serve files (returns full HTTP header and body).
+      webui_set_file_handler(window.i, handler.PrototypeC_webui_file_handler)
+      ; Set a custom handler to serve files with window parameter (returns full HTTP header and body).
+      webui_set_file_handler_window(window.i, handler.PrototypeC_webui_file_handler_window)
+
       ; -- Other ---------------------------
-      ; Check a specific window if it's still running
+      ; Check if a specific window is still running.
       webui_is_shown.i(window.i)
-      ; Set the maximum time in seconds to wait for browser to start
+      ; Set the maximum time in seconds to wait for the window to connect.
       webui_set_timeout(second.i)
-      ; Set the default embedded HTML favicon
+      ; Set the default embedded HTML favicon.
       webui_set_icon(window.i, icon.p-Ascii, icon_type.p-Ascii)
-      ; Allow the window URL to be re-used in normal web browsers
-      webui_set_multi_access(window.i, status.b)
-      
-      ; -- JavaScript ----------------------
-      ; Run JavaScript quickly with no waiting for the response.
-      webui_run(window.i, script.p-Ascii)
-      ; Run a JavaScript, and get the response back (Make sure your local buffer can hold the response).
-      webui_script.i(window.i, script.p-Ascii, timeout.i, *buffer, buffer_length.i)
-      ; Chose between Deno and Nodejs runtime for .js and .ts files.
-      webui_set_runtime(window.i, run_time.i)
-      ; Parse argument as integer.
-      webui_get_int.q(*e.webui_event_t)
-      ; Parse argument as string.
-      webui_get_string.i(*e.webui_event_t)
-      ; Parse argument as boolean.
-      webui_get_bool.i(*e.webui_event_t)
-      ; Return the response to JavaScript as integer.
-      webui_return_int(*e.webui_event_t, number.i)
-      ; Return the response to JavaScript as string.
-      webui_return_string(*e.webui_event_t, const.p-Ascii)
-      ; Return the response to JavaScript as boolean.
-      webui_return_bool(*e.webui_event_t, bool.i)
-      ; Base64 encoding. Use this to safely send text based data to the UI. If it fails it will return NULL.
-      webui_encode.i(*char)
-      ; Base64 decoding. Use this to safely decode received Base64 text from the UI. If it fails it will return NULL.
-      webui_decode.i(char.p-Ascii)
-      ; Safely free a buffer allocated by WebUI, For example when using webui_encode().
+      ; Encode text to Base64. The returned buffer needs to be freed.
+      webui_encode.i(str.p-Ascii)
+      ; Decode a Base64 encoded text. The returned buffer needs to be freed.
+      webui_decode.i(str.p-Ascii)
+      ; Safely free a buffer allocated by WebUI.
       webui_free(*ptr)
-      
+      ; Safely allocate memory using the WebUI memory management system.
+      webui_malloc.i(size.i)
+      ; Copy raw data.
+      webui_memcpy(*dest, *src, count.i)
+      ; Safely send raw data to the UI. All clients.
+      webui_send_raw(window.i, function.p-Ascii, *raw, size.i)
+      ; Safely send raw data to the UI. Single client.
+      webui_send_raw_client(*e.webui_event_t, function.p-Ascii, *raw, size.i)
+      ; Set a window in hidden mode. Should be called before `webui_show()`.
+      webui_set_hide(window.i, status.i)
+      ; Set the window size.
+      webui_set_size(window.i, width.l, height.l)
+      ; Set the window minimum size.
+      webui_set_minimum_size(window.i, width.l, height.l)
+      ; Set the window position.
+      webui_set_position(window.i, x.l, y.l)
+      ; Center the window on the screen.
+      webui_set_center(window.i)
+      ; Set the web browser profile to use.
+      webui_set_profile(window.i, name.p-Ascii, path.p-Ascii)
+      ; Set the web browser proxy server to use.
+      webui_set_proxy(window.i, proxy_server.p-Ascii)
+      ; Get current URL of a running window.
+      webui_get_url.i(window.i)
+      ; Open a URL in the native default web browser.
+      webui_open_url(url.p-Ascii)
+      ; Allow a specific window address to be accessible from a public network.
+      webui_set_public(window.i, status.i)
+      ; Navigate to a specific URL. All clients.
+      webui_navigate(window.i, url.p-Ascii)
+      ; Navigate to a specific URL. Single client.
+      webui_navigate_client(*e.webui_event_t, url.p-Ascii)
+      ; Free all memory resources. Should be called only at the end.
+      webui_clean()
+      ; Delete all local web-browser profiles folder.
+      webui_delete_all_profiles()
+      ; Delete a specific window web-browser local folder profile.
+      webui_delete_profile(window.i)
+      ; Get the parent process ID (current backend application process).
+      webui_get_parent_process_id.i(window.i)
+      ; Get the child process ID (web browser window).
+      webui_get_child_process_id.i(window.i)
+      ; Get Win32 window HWND (Windows only).
+      webui_win32_get_hwnd.i(window.i)
+      ; Get window HWND (Win32) or GtkWindow (Linux).
+      webui_get_hwnd.i(window.i)
+      ; Get the network port of a running window.
+      webui_get_port.i(window.i)
+      ; Set a custom web-server/websocket network port to be used by WebUI.
+      webui_set_port.i(window.i, port.i)
+      ; Get an available usable free network port.
+      webui_get_free_port.i()
+      ; Set a custom logger function.
+      webui_set_logger(func.PrototypeC_webui_logger, *user_data)
+      ; Control the WebUI behaviour.
+      webui_set_config(option.i, status.i)
+      ; Control if UI events from this window should be processed in a single blocking thread or non-blocking threads.
+      webui_set_event_blocking(window.i, status.i)
+      ; Make a WebView window frameless.
+      webui_set_frameless(window.i, status.i)
+      ; Make a WebView window transparent.
+      webui_set_transparent(window.i, status.i)
+      ; Get the HTTP mime type of a file.
+      webui_get_mime_type.i(file.p-Ascii)
+      ; Set the SSL/TLS certificate and the private key content, both in PEM format.
+      webui_set_tls_certificate.i(certificate_pem.p-Ascii, private_key_pem.p-Ascii)
+
+      ; -- JavaScript ----------------------
+      ; Run JavaScript without waiting for the response. All clients.
+      webui_run(window.i, script.p-Ascii)
+      ; Run JavaScript without waiting for the response. Single client.
+      webui_run_client(*e.webui_event_t, script.p-Ascii)
+      ; Run JavaScript and get the response back. Single client mode only.
+      webui_script.i(window.i, script.p-Ascii, timeout.i, *buffer, buffer_length.i)
+      ; Run JavaScript and get the response back. Single client.
+      webui_script_client.i(*e.webui_event_t, script.p-Ascii, timeout.i, *buffer, buffer_length.i)
+      ; Choose between Deno, Bun and Nodejs as runtime for .js and .ts files.
+      webui_set_runtime(window.i, runtime.i)
+      ; Get how many arguments there are in an event.
+      webui_get_count.i(*e.webui_event_t)
+      ; Get an argument as integer at a specific index.
+      webui_get_int_at.q(*e.webui_event_t, index.i)
+      ; Get the first argument as integer.
+      webui_get_int.q(*e.webui_event_t)
+      ; Get an argument as float at a specific index.
+      webui_get_float_at.d(*e.webui_event_t, index.i)
+      ; Get the first argument as float.
+      webui_get_float.d(*e.webui_event_t)
+      ; Get an argument as string at a specific index.
+      webui_get_string_at.i(*e.webui_event_t, index.i)
+      ; Get the first argument as string.
+      webui_get_string.i(*e.webui_event_t)
+      ; Get an argument as boolean at a specific index.
+      webui_get_bool_at.i(*e.webui_event_t, index.i)
+      ; Get the first argument as boolean.
+      webui_get_bool.i(*e.webui_event_t)
+      ; Get the size in bytes of an argument at a specific index.
+      webui_get_size_at.i(*e.webui_event_t, index.i)
+      ; Get the size in bytes of the first argument.
+      webui_get_size.i(*e.webui_event_t)
+      ; Return the response to JavaScript as integer.
+      webui_return_int(*e.webui_event_t, n.q)
+      ; Return the response to JavaScript as float.
+      webui_return_float(*e.webui_event_t, f.d)
+      ; Return the response to JavaScript as string.
+      webui_return_string(*e.webui_event_t, s.p-Ascii)
+      ; Return the response to JavaScript as boolean.
+      webui_return_bool(*e.webui_event_t, b.i)
+      ; Get the last WebUI error code.
+      webui_get_last_error_number.i()
+      ; Get the last WebUI error message.
+      webui_get_last_error_message.i()
+
       ; -- Interface -----------------------
-      ; Bind a specific html element click event with a function. Empty element means all events. This replace webui_bind(). The func is (Window, EventType, Element, Data, EventNumber)
+      ; Bind an HTML element with a function. Empty element means all events. The func is (Window, EventType, Element, EventNumber, BindID)
       webui_interface_bind.i(window.i, element.p-Ascii, *func)
-      ; When using `webui_interface_bind()` you may need this function to easily set your callback response.
+      ; When using `webui_interface_bind()`, set the response to JavaScript.
       webui_interface_set_response(window.i, event_number.i, response.p-Ascii)
-      ; Check if the app still running or not. This replace webui_wait().
+      ; Set an async file handler response.
+      webui_interface_set_response_file_handler(window.i, *response, length.l)
+      ; Check if the app is still running.
       webui_interface_is_app_running.i()
-      ; Get window unique ID
+      ; Get a unique window ID.
       webui_interface_get_window_id.i(window.i)
-      ; Get a unique ID. Same ID as `webui_bind()`. Return > 0 if bind exist.
-      webui_interface_get_bind_id.i(window.i, element.p-Ascii)
+      ; Get an argument as string at a specific index.
+      webui_interface_get_string_at.i(window.i, event_number.i, index.i)
+      ; Get an argument as integer at a specific index.
+      webui_interface_get_int_at.q(window.i, event_number.i, index.i)
+      ; Get an argument as float at a specific index.
+      webui_interface_get_float_at.d(window.i, event_number.i, index.i)
+      ; Get an argument as boolean at a specific index.
+      webui_interface_get_bool_at.i(window.i, event_number.i, index.i)
+      ; Get the size in bytes of an argument at a specific index.
+      webui_interface_get_size_at.i(window.i, event_number.i, index.i)
+      ; Show a window using embedded HTML, or a file. Single client.
+      webui_interface_show_client.i(window.i, event_number.i, content.p-Ascii)
+      ; Close a specific client.
+      webui_interface_close_client(window.i, event_number.i)
+      ; Safely send raw data to the UI. Single client.
+      webui_interface_send_raw_client(window.i, event_number.i, function.p-Ascii, *raw, size.i)
+      ; Navigate to a specific URL. Single client.
+      webui_interface_navigate_client(window.i, event_number.i, url.p-Ascii)
+      ; Run JavaScript without waiting for the response. Single client.
+      webui_interface_run_client(window.i, event_number.i, script.p-Ascii)
+      ; Run JavaScript and get the response back. Single client.
+      webui_interface_script_client.i(window.i, event_number.i, script.p-Ascii, timeout.i, *buffer, buffer_length.i)
     EndImport
     
     CompilerIf #PB_Compiler_IsMainFile
